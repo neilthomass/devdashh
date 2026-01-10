@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "devdashh"
-version = "1.0.0"
+version = "1.0.1"
 description = "A terminal-based typing speed test for Python developers"
 readme = "README.md"
 license = "MIT"
@@ -36,6 +36,7 @@ Issues = "https://github.com/neilthomass/devdashh/issues"
 
 [project.scripts]
 devdash = "devdash.main:main"
+devdashh = "devdash.main:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
