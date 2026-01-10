@@ -7,6 +7,43 @@ import termios
 import os
 from datetime import timedelta, datetime
 from collections import defaultdict
+from pathlib import Path
+
+# Get the directory where this script is located
+SCRIPT_DIR = Path(__file__).parent.resolve()
+CONFIG_PATH = Path.home() / '.devdash.json'
+
+DEFAULT_CONFIG = {
+    'tab_spaces': 2,
+    'show_live_stats': True,
+}
+
+def get_data_path():
+    """Get the path to data.txt in the script directory."""
+    return SCRIPT_DIR / 'data.txt'
+
+def get_problems_path():
+    """Get the path to problems.json in the script directory."""
+    return SCRIPT_DIR / 'problems.json'
+
+def load_config():
+    """Load configuration from ~/.devdash.json or return defaults."""
+    config = DEFAULT_CONFIG.copy()
+    if CONFIG_PATH.exists():
+        try:
+            with open(CONFIG_PATH, 'r') as f:
+                user_config = json.load(f)
+                config.update(user_config)
+        except (json.JSONDecodeError, IOError):
+            pass  # Use defaults if config is invalid
+    return config
+
+def save_default_config():
+    """Save default configuration to ~/.devdash.json if it doesn't exist."""
+    if not CONFIG_PATH.exists():
+        with open(CONFIG_PATH, 'w') as f:
+            json.dump(DEFAULT_CONFIG, f, indent=2)
+        print(f"Created config file: {CONFIG_PATH}")
 
 # ANSI color codes - using standard codes for compatibility
 class Colors:
@@ -33,9 +70,10 @@ def get_terminal_height():
     """Get the terminal height in lines."""
     return os.get_terminal_size().lines
 
-def load_random_problem(filename='problems.json'):
+def load_random_problem():
     """Load a random problem from the JSON file."""
-    with open(filename, 'r') as f:
+    problems_path = get_problems_path()
+    with open(problems_path, 'r') as f:
         data = json.load(f)
     # Filter out empty problem lists
     data = [p for p in data if p and len(p) > 0]
@@ -56,13 +94,16 @@ def get_char():
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
     return char
 
-def display_header(problem_id):
-    """Display the header with problem information."""
-    print(f"{Colors.ORANGE}{'='*80}")
-    print(f"{Colors.ORANGE}TYPING SPEED TEST")
-    print(f"{Colors.ORANGE}{'='*80}")
-    print(f"{Colors.YELLOW}Problem: {problem_id}")
-    print(f"{Colors.DIM}Type the code below. Press Ctrl+C to quit.\n")
+def display_header(problem_id, stats=None):
+    """Display the header with problem information and live stats."""
+    print(f"{Colors.DIM}{'─'*70}")
+    if stats:
+        elapsed_str = f"{int(stats['elapsed']//60)}:{int(stats['elapsed']%60):02d}"
+        accuracy_color = Colors.GREEN if stats['accuracy'] >= 95 else Colors.YELLOW if stats['accuracy'] >= 85 else Colors.RED
+        print(f"{Colors.YELLOW}  {problem_id:<40} {Colors.DIM}│ {Colors.WHITE}CPM: {Colors.GREEN}{stats['cpm']:>3.0f} {Colors.DIM}│ {accuracy_color}Acc: {stats['accuracy']:>5.1f}% {Colors.DIM}│ {Colors.WHITE}{elapsed_str}")
+    else:
+        print(f"{Colors.YELLOW}  {problem_id}")
+    print(f"{Colors.DIM}{'─'*70}")
 
 def calculate_scroll_window(target_text, current_pos, terminal_height):
     """Calculate which lines to display based on cursor position for smooth scrolling."""
@@ -93,26 +134,45 @@ def calculate_scroll_window(target_text, current_pos, terminal_height):
     return start_line, end_line
 
 def display_text_with_cursor(target_text, typed_text, current_pos):
-    """Display the target text with color-coded typed characters and cursor."""
+    """Display the target text with color-coded typed characters and cursor, IDE-style."""
     print('\033[H\033[J', end='')  # Clear screen and move to top
 
     lines = target_text.split('\n')
     terminal_height = get_terminal_height()
     start_line, end_line = calculate_scroll_window(target_text, current_pos, terminal_height)
+    total_lines = len(lines)
+    line_num_width = len(str(total_lines))
 
     char_count = 0
     # Calculate char_count offset for start_line
     for i in range(start_line):
         char_count += len(lines[i]) + 1  # +1 for newline
 
+    # Find which line cursor is on for highlighting
+    cursor_char_count = 0
+    cursor_line = 0
+    for idx, line in enumerate(lines):
+        if cursor_char_count + len(line) >= current_pos:
+            cursor_line = idx
+            break
+        cursor_char_count += len(line) + 1
+
     for line_idx in range(start_line, end_line):
         line = lines[line_idx]
-        output = ""
+        line_num = line_idx + 1
+
+        # Line number gutter - highlight current line
+        if line_idx == cursor_line:
+            gutter = f"{Colors.YELLOW}{line_num:>{line_num_width}} {Colors.DIM}│ "
+        else:
+            gutter = f"{Colors.DIM}{line_num:>{line_num_width}} │ "
+
+        output = gutter
         for char_idx, char in enumerate(line):
             abs_pos = char_count + char_idx
 
-            # Convert tabs to 8 spaces for display
-            display_char = '        ' if char == '\t' else char
+            # Convert tabs to 4 spaces for display
+            display_char = '    ' if char == '\t' else char
 
             if abs_pos < len(typed_text):
                 if typed_text[abs_pos] == char:
@@ -120,39 +180,27 @@ def display_text_with_cursor(target_text, typed_text, current_pos):
                 else:
                     # Show the incorrect character with red highlight
                     wrong_char = typed_text[abs_pos]
-                    display_wrong = '        ' if wrong_char == '\t' else ('·' if wrong_char == ' ' else wrong_char)
+                    display_wrong = '    ' if wrong_char == '\t' else ('·' if wrong_char == ' ' else wrong_char)
                     output += f"{Colors.ERROR_HIGHLIGHT}{display_wrong}"
             elif abs_pos == current_pos:
-                # Highlight current character cell with background (orange background + black text)
+                # Highlight current character cell with cursor
                 if char == ' ':
-                    # For spaces, show highlighted block
                     output += f"{Colors.CURSOR_HIGHLIGHT} "
                 else:
                     output += f"{Colors.CURSOR_HIGHLIGHT}{display_char}"
             else:
                 output += f"{Colors.DIM}{display_char}"
 
-        # Check if cursor is at end of line (one position after last char)
+        # Check if cursor is at end of line (for Enter key)
         end_of_line_pos = char_count + len(line)
         if end_of_line_pos == current_pos and line_idx < len(lines) - 1:
-            # Show cursor at end of line for Enter key (orange background + black text)
             output += f"{Colors.CURSOR_HIGHLIGHT}↵"
 
         print(output + Colors.WHITE)
         char_count += len(line)
 
-
         # Account for newline character
         if line_idx < len(lines) - 1:
-            if char_count < len(typed_text):
-
-                pass
-            elif char_count == current_pos:
-                #print(f"\033[48;2;222;157;105m{Colors.BOLD}↵\033[0m")  # Highlight newline with background
-                pass
-            else:
-                pass
-
             char_count += 1
 
 def calculate_metrics(target_text, typed_text, elapsed_time, all_typed_chars, wrong_typed_chars):
@@ -162,9 +210,12 @@ def calculate_metrics(target_text, typed_text, elapsed_time, all_typed_chars, wr
     correct_chars = sum(1 for i, c in enumerate(typed_text) if i < len(target_text) and c == target_text[i])
 
     minutes = elapsed_time / 60
-    # WPM: ((ALL TYPED CHARS / 5) - wrong typed chars) / Time in minutes
-    accuracy = (correct_chars / all_typed_chars * 100) if all_typed_chars > 0 else 0
-    wpm = ((all_typed_chars - wrong_typed_chars) / 5) / minutes * accuracy / 100 if minutes > 0 else 0
+
+    # Accuracy: correct keystrokes / total keystrokes (capped at 100%)
+    accuracy = min(100.0, (correct_chars / all_typed_chars * 100)) if all_typed_chars > 0 else 0
+
+    # CPM: Characters Per Minute (correct characters only)
+    cpm = correct_chars / minutes if minutes > 0 else 0
 
     return {
         'total_chars': total_chars,
@@ -172,7 +223,7 @@ def calculate_metrics(target_text, typed_text, elapsed_time, all_typed_chars, wr
         'correct_chars': correct_chars,
         'all_typed_chars': all_typed_chars,
         'wrong_typed_chars': wrong_typed_chars,
-        'wpm': wpm,
+        'cpm': cpm,
         'accuracy': accuracy,
         'time': elapsed_time
     }
@@ -184,7 +235,7 @@ def display_results(metrics, missed_chars):
     print(f"{Colors.ORANGE}RESULTS")
     print(f"{Colors.ORANGE}{'='*80}")
     print(f"{Colors.WHITE}Time Elapsed: {timedelta(seconds=int(metrics['time']))}")
-    print(f"{Colors.WHITE}Words Per Minute (WPM): {Colors.GREEN}{metrics['wpm']:.1f}")
+    print(f"{Colors.WHITE}Characters Per Minute (CPM): {Colors.GREEN}{metrics['cpm']:.0f}")
     print(f"{Colors.WHITE}Accuracy: {Colors.GREEN if metrics['accuracy'] >= 95 else Colors.YELLOW}{metrics['accuracy']:.1f}%")
     print(f"{Colors.WHITE}Character Breakdown:")
     print(f"{Colors.WHITE}  Target Characters: {metrics['total_chars']}")
@@ -203,13 +254,15 @@ def display_results(metrics, missed_chars):
 def save_to_data_file(metrics):
     """Save metrics to data.txt file."""
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    with open('data.txt', 'a') as f:
-        f.write(f"{timestamp},{metrics['wpm']:.2f},{metrics['accuracy']:.2f},{metrics['time']:.2f}\n")
+    data_path = get_data_path()
+    with open(data_path, 'a') as f:
+        f.write(f"{timestamp},{metrics['cpm']:.0f},{metrics['accuracy']:.2f},{metrics['time']:.2f}\n")
 
-def plot_terminal(data_file='data.txt'):
-    """Plot WPM and accuracy vs time in the terminal."""
+def plot_terminal():
+    """Plot CPM and accuracy vs time in the terminal."""
     try:
-        with open(data_file, 'r') as f:
+        data_path = get_data_path()
+        with open(data_path, 'r') as f:
             lines = f.readlines()
 
         if not lines:
@@ -217,15 +270,15 @@ def plot_terminal(data_file='data.txt'):
             return
 
         # Parse data
-        wpms = []
+        cpms = []
         accuracies = []
         for line in lines:
             parts = line.strip().split(',')
             if len(parts) >= 3:
-                wpms.append(float(parts[1]))
+                cpms.append(float(parts[1]))
                 accuracies.append(float(parts[2]))
 
-        if not wpms:
+        if not cpms:
             print(f"{Colors.YELLOW}No valid data to plot.")
             return
 
@@ -234,7 +287,7 @@ def plot_terminal(data_file='data.txt'):
         plot_height = 15
 
         # Normalize data for plotting
-        max_wpm = max(wpms) if wpms else 1
+        max_cpm = max(cpms) if cpms else 1
         max_accuracy = 100  # Accuracy is always 0-100
 
         print(f"\n{Colors.ORANGE}{'='*80}")
@@ -242,17 +295,17 @@ def plot_terminal(data_file='data.txt'):
         print(f"{Colors.ORANGE}{'='*80}\n")
 
         # Plot header
-        print(f"{Colors.WHITE}       WPM                                 Accuracy (%)")
+        print(f"{Colors.WHITE}       CPM                                 Accuracy (%)")
 
         # Plot both graphs side by side
         for row in range(plot_height, 0, -1):
-            wpm_threshold = (row / plot_height) * max_wpm
+            cpm_threshold = (row / plot_height) * max_cpm
             acc_threshold = (row / plot_height) * max_accuracy
 
-            # WPM side
-            line = f"{Colors.DIM}{wpm_threshold:5.1f} {Colors.WHITE}│"
-            for i, wpm in enumerate(wpms[-plot_width:]):
-                if wpm >= wpm_threshold:
+            # CPM side
+            line = f"{Colors.DIM}{cpm_threshold:5.0f} {Colors.WHITE}│"
+            for i, cpm in enumerate(cpms[-plot_width:]):
+                if cpm >= cpm_threshold:
                     line += f"{Colors.GREEN}▇"
                 else:
                     line += f"{Colors.DIM}·"
@@ -271,15 +324,31 @@ def plot_terminal(data_file='data.txt'):
             print(line)
 
         # Bottom axis
-        print(f"{Colors.DIM}      └{'─' * min(len(wpms), plot_width)}  {'      └'}{'─' * min(len(accuracies), plot_width)}")
+        print(f"{Colors.DIM}      └{'─' * min(len(cpms), plot_width)}  {'      └'}{'─' * min(len(accuracies), plot_width)}")
 
-        print(f"\n{Colors.DIM}Showing last {min(len(wpms), plot_width)} runs")
+        print(f"\n{Colors.DIM}Showing last {min(len(cpms), plot_width)} runs")
         print(f"{Colors.ORANGE}{'='*80}\n")
 
     except FileNotFoundError:
         print(f"{Colors.YELLOW}No data file found yet. Complete a test to start tracking progress.")
 
+def get_live_stats(start_time, typed_text, target_text, all_typed_chars, wrong_typed_chars):
+    """Calculate live statistics during typing."""
+    if start_time is None:
+        return {'cpm': 0, 'accuracy': 100.0, 'elapsed': 0}
+
+    elapsed = time.time() - start_time
+    minutes = elapsed / 60
+
+    correct_chars = sum(1 for i, c in enumerate(typed_text) if i < len(target_text) and c == target_text[i])
+    cpm = correct_chars / minutes if minutes > 0 else 0
+    accuracy = min(100.0, (correct_chars / all_typed_chars * 100)) if all_typed_chars > 0 else 100.0
+
+    return {'cpm': cpm, 'accuracy': accuracy, 'elapsed': elapsed}
+
 def main():
+    config = load_config()
+
     try:
         # Load problem
         problem_id, target_text = load_random_problem()
@@ -294,15 +363,34 @@ def main():
         all_typed_chars = 0  # Track all characters typed including deleted ones
         wrong_typed_chars = 0  # Track characters that were typed incorrectly
         missed_chars = defaultdict(int)  # Track which characters were missed
+        paused = False
+        pause_start = None
+        total_pause_time = 0
 
-        clear_screen()
-        display_header(problem_id)
         # Main typing loop
         while current_pos < len(target_text):
-            display_header(problem_id)
+            # Calculate live stats
+            stats = None
+            if start_time is not None and config.get('show_live_stats', True):
+                stats = get_live_stats(start_time, typed_text, target_text, all_typed_chars, wrong_typed_chars)
+
+            display_header(problem_id, stats)
             display_text_with_cursor(target_text, typed_text, current_pos)
 
             char = get_char()
+
+            # Handle pause (Escape key)
+            if ord(char) == 27:  # Escape
+                if start_time is not None:
+                    paused = True
+                    pause_start = time.time()
+                    clear_screen()
+                    print(f"\n{Colors.YELLOW}  PAUSED")
+                    print(f"{Colors.DIM}  Press any key to continue...")
+                    get_char()  # Wait for any key
+                    total_pause_time += time.time() - pause_start
+                    paused = False
+                continue
 
             # Start timer on first keypress
             if start_time is None:
@@ -313,64 +401,54 @@ def main():
                 raise KeyboardInterrupt
             elif ord(char) == 127:  # Backspace
                 if typed_text:
+                    # Check if we're removing a correct or wrong character
+                    removed_pos = current_pos - 1
+                    if removed_pos >= 0 and removed_pos < len(target_text):
+                        was_correct = typed_text[removed_pos] == target_text[removed_pos]
+                        # Don't penalize - just remove the character
                     typed_text = typed_text[:-1]
                     current_pos = max(0, current_pos - 1)
             elif char == '\t':  # Tab key
-                typed_text += '  '  # Insert 2 spaces
-                all_typed_chars += 2
+                tab_spaces = config.get('tab_spaces', 2)
+                typed_text += ' ' * tab_spaces
+                all_typed_chars += tab_spaces
                 # Check if these characters are correct
-                for i in range(current_pos, min(current_pos + 2, len(target_text))):
+                for i in range(current_pos, min(current_pos + tab_spaces, len(target_text))):
                     if i >= len(target_text) or typed_text[i] != target_text[i]:
                         wrong_typed_chars += 1
                         if i < len(target_text):
                             missed_chars[target_text[i]] += 1
-                current_pos += 2
-            elif char == '\n' or char == '\r':  # Enter key - autoindent
-                # Find the start of the current line in target_text
-                target_line_start = target_text.rfind('\n', 0, current_pos) + 1
-                target_line = target_text[target_line_start:target_text.find('\n', target_line_start) if '\n' in target_text[target_line_start:] else len(target_text)]
-
-                # Count leading whitespace (tabs and spaces) in current line
-                current_indent = ''
-                for c in target_line:
-                    if c in ('\t', ' '):
-                        current_indent += c
-                    else:
-                        break
-
-                # Find next line's indentation
+                current_pos += tab_spaces
+            elif char == '\n' or char == '\r':  # Enter key - IDE-like auto-indent
+                # Find the next line's leading whitespace in target_text
                 next_line_start = current_pos + 1
-                next_line_end = target_text.find('\n', next_line_start) if '\n' in target_text[next_line_start:] else len(target_text)
-                next_line = target_text[next_line_start:next_line_end]
+                if next_line_start < len(target_text):
+                    next_line_end = target_text.find('\n', next_line_start)
+                    if next_line_end == -1:
+                        next_line_end = len(target_text)
+                    next_line = target_text[next_line_start:next_line_end]
 
-                next_indent = ''
-                for c in next_line:
-                    if c in ('\t', ' '):
-                        next_indent += c
-                    else:
-                        break
+                    # Get the target's leading whitespace for the next line
+                    target_indent = ''
+                    for c in next_line:
+                        if c in ('\t', ' '):
+                            target_indent += c
+                        else:
+                            break
 
-                # If next line has less indentation, just skip to next char (newline only)
-                # Otherwise use current line's indentation
-                if len(next_indent) < len(current_indent):
-                    typed_text += '\n'
-                    all_typed_chars += 1
-                    if current_pos >= len(target_text) or typed_text[current_pos] != target_text[current_pos]:
-                        wrong_typed_chars += 1
-                        if current_pos < len(target_text):
-                            missed_chars[target_text[current_pos]] += 1
-                    current_pos += 1
+                    # Auto-fill newline + target indentation
+                    auto_fill = '\n' + target_indent
                 else:
-                    indent_to_add = '\n' + current_indent
-                    typed_text += indent_to_add
-                    all_typed_chars += len(indent_to_add)
-                    # Check if these characters are correct
-                    for i in range(current_pos, min(current_pos + len(indent_to_add), len(target_text))):
-                        if i >= len(target_text) or typed_text[i] != target_text[i]:
-                            wrong_typed_chars += 1
-                            if i < len(target_text):
-                                missed_chars[target_text[i]] += 1
-                    current_pos += len(indent_to_add)
+                    auto_fill = '\n'
+
+                typed_text += auto_fill
+                all_typed_chars += 1  # Only count Enter as 1 keystroke (indent is auto)
+                # Check correctness for the newline character only
+                if current_pos >= len(target_text) or target_text[current_pos] != '\n':
+                    wrong_typed_chars += 1
+                    if current_pos < len(target_text):
+                        missed_chars[target_text[current_pos]] += 1
+                current_pos += len(auto_fill)
             else:
                 typed_text += char
                 all_typed_chars += 1
@@ -381,8 +459,8 @@ def main():
                         missed_chars[target_text[current_pos]] += 1
                 current_pos += 1
 
-        # Calculate elapsed time
-        elapsed_time = time.time() - start_time
+        # Calculate elapsed time (subtract pause time)
+        elapsed_time = time.time() - start_time - total_pause_time
 
         # Calculate and display metrics
         metrics = calculate_metrics(target_text, typed_text, elapsed_time, all_typed_chars, wrong_typed_chars)
@@ -395,7 +473,7 @@ def main():
         plot_terminal()
 
     except KeyboardInterrupt:
-        print(f"{Colors.YELLOW}Test cancelled.")
+        print(f"\n{Colors.YELLOW}Test cancelled.")
         sys.exit(0)
     except FileNotFoundError:
         print(f"{Colors.RED}Error: problems.json not found!")

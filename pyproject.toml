@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=77.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "devdashh"
+version = "1.0.0"
+description = "A terminal-based typing speed test for Python developers"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.8"
+authors = [
+    {name = "Neil Thomas"}
+]
+keywords = ["typing", "speed-test", "terminal", "cli", "python", "leetcode", "practice"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Terminals",
+    "Topic :: Education",
+]
+
+[project.urls]
+Homepage = "https://github.com/neilthomass/devdashh"
+Repository = "https://github.com/neilthomass/devdashh"
+Issues = "https://github.com/neilthomass/devdashh/issues"
+
+[project.scripts]
+devdash = "devdash.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["devdash*"]
+
+[tool.setuptools.package-data]
+devdash = ["problems.json"]
