@@ -22,6 +22,7 @@ Or with pipx (recommended for macOS with Homebrew):
 ```bash
 brew install pipx
 pipx install devdashh
+pipx ensurepath
 ```
 
 ## Usage
