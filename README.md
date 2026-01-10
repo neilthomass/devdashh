@@ -17,6 +17,13 @@ A terminal-based typing speed test designed for Python developers. Practice typi
 pip install devdashh
 ```
 
+Or with pipx (recommended for macOS with Homebrew):
+
+```bash
+brew install pipx
+pipx install devdashh
+```
+
 ## Usage
 
 ```bash
